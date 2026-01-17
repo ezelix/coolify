@@ -1,0 +1,9 @@
+tunnel: "{{ tunnel_id | default('auto') }}"  # Set tunnel-id from dashboard
+credentials-file: "{{ cloudflared_config_dir }}/{{ tunnel_id }}.json"
+
+ingress:
+  - hostname: "*.{{ domain_name }}"
+    service: http://localhost:8000
+  - hostname: "ssh.{{ domain_name }}"
+    service: ssh://localhost:22
+  - service: http_status:404

@@ -1,0 +1,9 @@
+tunnel: tunnel-id  # Get from dashboard or auto-register
+credentials-file: /etc/cloudflared/{{ tunnel_id }}.json
+
+ingress:
+  - hostname: "*.{{ domain_name }}"
+    service: http://localhost:8000  # Coolify/Traefik proxy
+  - hostname: "ssh.{{ domain_name }}"
+    service: ssh://localhost:22
+  - service: http_status:404

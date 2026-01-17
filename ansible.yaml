@@ -1,0 +1,151 @@
+---
+- name: Setup Coolify Server with Cloudflare Tunnel (firewalld)
+  hosts: coolify_servers
+  become: true
+  vars_prompt:
+    - name: "cloudflare_tunnel_token"
+      prompt: "Enter your Cloudflare Tunnel token"
+      private: true
+    - name: "coolify_version"
+      prompt: "Coolify version (default: latest)"
+      default: "latest"
+  vars:
+    coolify_user: "coolify"
+    coolify_group: "coolify"
+    cloudflared_config_dir: "/etc/cloudflared"
+    domain_name: "{{ ansible_fqdn | default('yourdomain.com') }}"
+    cloudflare_ips:
+      - "173.245.48.0/20"
+      - "103.21.244.0/22"
+      - "103.22.200.0/22"
+      - "103.31.4.0/22"
+      - "141.101.64.0/18"
+      - "108.162.192.0/18"
+      - "190.93.240.0/20"
+      - "188.114.96.0/20"
+      - "197.234.240.0/22"
+      - "198.41.128.0/17"
+      - "162.158.0.0/15"
+      - "104.16.0.0/13"
+      - "104.24.0.0/14"
+      - "172.64.0.0/13"
+      - "131.0.72.0/22"
+      # Add full list from https://www.cloudflare.com/ips/
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - curl
+          - wget
+          - docker.io
+          - docker-compose
+          - firewalld
+        state: present
+
+    - name: Start Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Install Coolify
+      shell: curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
+      args:
+        creates: /usr/local/bin/coolify
+      environment:
+        COOLIFY_VERSION: "{{ coolify_version }}"
+
+    - name: Create Coolify user
+      user:
+        name: "{{ coolify_user }}"
+        groups: docker
+        append: true
+        create_home: true
+
+    - name: Install cloudflared
+      shell: |
+        curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+        echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared {{ ansible_distribution_release }} main' | tee /etc/apt/sources.list.d/cloudflared.list
+        apt-get update && apt-get install -y cloudflared
+      args:
+        creates: /usr/bin/cloudflared
+
+    - name: Create cloudflared directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ cloudflared_config_dir }}"
+
+    - name: Deploy cloudflared config
+      template:
+        src: config.yml.j2
+        dest: "{{ cloudflared_config_dir }}/config.yml"
+        mode: '0644'
+      notify: restart cloudflared
+
+    - name: Deploy systemd service
+      template:
+        src: cloudflared.service.j2
+        dest: /etc/systemd/system/cloudflared.service
+        mode: '0644'
+      notify:
+        - daemon-reload
+        - restart cloudflared
+
+    - name: Enable firewalld
+      systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Create firewalld zone for Cloudflare
+      firewalld:
+        zone: public
+        service: ssh
+        permanent: true
+        state: disabled  # Block default SSH
+
+    - name: Allow SSH from Cloudflare IPs only
+      firewalld:
+        port: 22/tcp
+        source: "{{ item }}"
+        zone: public
+        permanent: true
+        state: enabled
+      loop: "{{ cloudflare_ips }}"
+
+    - name: Allow Docker ports (Coolify internal)
+      firewalld:
+        port: "{{ item }}/tcp"
+        zone: public
+        permanent: true
+        state: disabled  # No external access needed with tunnel
+      loop:
+        - 80
+        - 443
+        - 8000  # Coolify proxy
+
+    - name: Reload firewalld
+      command: firewall-cmd --reload
+
+    - name: Start Coolify
+      systemd:
+        name: coolify
+        state: started
+        enabled: true
+
+  handlers:
+    - name: daemon-reload
+      systemd:
+        daemon_reload: true
+
+    - name: restart cloudflared
+      systemd:
+        name: cloudflared
+        state: restarted
