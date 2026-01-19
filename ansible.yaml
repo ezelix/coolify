@@ -1,6 +1,7 @@
 ---
 - name: Setup Coolify Server with Cloudflare Tunnel (firewalld)
   hosts: coolify_servers
+  connection: local
   become: true
   vars_prompt:
     - name: "cloudflare_tunnel_token"
